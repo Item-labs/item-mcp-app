@@ -235,12 +235,30 @@ export class ItemApiClient {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton accessor
+// Per-session client management
 // ---------------------------------------------------------------------------
 
-let _client: ItemApiClient | null = null;
+/** API keys indexed by MCP session ID, populated by the /mcp middleware */
+const sessionApiKeys = new Map<string, string>();
 
-export function getItemClient(): ItemApiClient {
-  if (!_client) _client = new ItemApiClient();
-  return _client;
+export function setSessionApiKey(sessionId: string, apiKey: string): void {
+  sessionApiKeys.set(sessionId, apiKey);
+}
+
+/** Fallback singleton for local dev (reads from ITEM_API_KEY env var) */
+let _defaultClient: ItemApiClient | null = null;
+
+/**
+ * Get an API client for the given session.
+ * Looks up the API key from:
+ *   1. Per-session store (set via URL ?api_key= param)
+ *   2. ITEM_API_KEY environment variable (local dev fallback)
+ */
+export function getItemClient(sessionId?: string): ItemApiClient {
+  if (sessionId) {
+    const key = sessionApiKeys.get(sessionId);
+    if (key) return new ItemApiClient({ apiKey: key });
+  }
+  if (!_defaultClient) _defaultClient = new ItemApiClient();
+  return _defaultClient;
 }

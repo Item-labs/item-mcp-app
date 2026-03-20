@@ -15,7 +15,7 @@
 
 import { MCPServer, text, widget, error } from "mcp-use/server";
 import { z } from "zod";
-import { getItemClient } from "./src/lib/item-api.js";
+import { getItemClient, setSessionApiKey } from "./src/lib/item-api.js";
 import type { FieldSchema, ObjectTypeSchema } from "./src/lib/item-types.js";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,22 @@ const server = new MCPServer({
   baseUrl: process.env.MCP_URL || "http://localhost:3000",
   favicon: "favicon.ico",
   icons: [{ src: "favicon.ico", mimeType: "image/x-icon", sizes: ["16x16", "32x32"] }],
+});
+
+// ---------------------------------------------------------------------------
+// Middleware: extract api_key from URL query param for per-user auth.
+// Users connect with: https://host/mcp?api_key=sk_live_...
+// The key is stored by session ID so each user gets their own API client.
+// Falls back to ITEM_API_KEY env var for local development.
+// ---------------------------------------------------------------------------
+
+server.use("/mcp", async (c, next) => {
+  const apiKey = c.req.query("api_key");
+  const sessionId = c.req.header("mcp-session-id");
+  if (apiKey && sessionId) {
+    setSessionApiKey(sessionId, apiKey);
+  }
+  await next();
 });
 
 // ---------------------------------------------------------------------------
@@ -123,8 +139,8 @@ server.tool(
     }),
     annotations: { readOnlyHint: true },
   },
-  async ({ objectType }) => {
-    const client = getItemClient();
+  async ({ objectType }, ctx) => {
+    const client = getItemClient(ctx.session.sessionId);
     const result = await client.getSchema();
     if (result.error) return error(`Failed to get schema: ${result.error.message}`);
 
@@ -162,8 +178,8 @@ server.tool(
     annotations: { readOnlyHint: true },
     widget: { name: "view-display", invoking: "Loading...", invoked: "Loaded" },
   },
-  async ({ objectType, viewId, search, limit = 50, offset = 0, sort, order }) => {
-    const client = getItemClient();
+  async ({ objectType, viewId, search, limit = 50, offset = 0, sort, order }, ctx) => {
+    const client = getItemClient(ctx.session.sessionId);
 
     // Fetch objects and views in parallel
     const [viewsResult, listResult] = await Promise.all([
@@ -229,10 +245,10 @@ server.tool(
     annotations: { readOnlyHint: true },
     widget: { name: "object-card", invoking: "Loading...", invoked: "Loaded" },
   },
-  async ({ objectType, id, email }) => {
+  async ({ objectType, id, email }, ctx) => {
     if (!id && !email) return error("Provide either id or email.");
 
-    const client = getItemClient();
+    const client = getItemClient(ctx.session.sessionId);
     const result = await client.getObject(objectType, { id, email }, { include_all_fields: true });
     if (result.error) return error(`Failed to get ${objectType}: ${result.error.message}`);
 
@@ -264,8 +280,8 @@ server.tool(
     }),
     widget: { name: "object-card", invoking: "Creating...", invoked: "Created" },
   },
-  async ({ objectType, name: objectName, fields, profile_image_url }) => {
-    const client = getItemClient();
+  async ({ objectType, name: objectName, fields, profile_image_url }, ctx) => {
+    const client = getItemClient(ctx.session.sessionId);
     const result = await client.createObject(objectType, { name: objectName, fields, profile_image_url });
     if (result.error) return error(`Failed to create ${objectType}: ${result.error.message}`);
 
@@ -293,8 +309,8 @@ server.tool(
       profile_image_url: z.string().optional().describe("New avatar/logo URL"),
     }),
   },
-  async ({ objectType, id, name: objectName, fields, profile_image_url }) => {
-    const client = getItemClient();
+  async ({ objectType, id, name: objectName, fields, profile_image_url }, ctx) => {
+    const client = getItemClient(ctx.session.sessionId);
     const input: Partial<{ name: string; fields: Record<string, unknown>; profile_image_url: string }> = {};
     if (objectName !== undefined) input.name = objectName;
     if (fields !== undefined) input.fields = fields;
@@ -320,8 +336,8 @@ server.tool(
       id: z.string().describe("Object ID to delete"),
     }),
   },
-  async ({ objectType, id }) => {
-    const client = getItemClient();
+  async ({ objectType, id }, ctx) => {
+    const client = getItemClient(ctx.session.sessionId);
     const result = await client.deleteObject(objectType, id);
     if (result.error) return error(`Failed to delete ${objectType}: ${result.error.message}`);
 
