@@ -1,11 +1,17 @@
+/**
+ * Item.app CRM API Client
+ *
+ * Wraps the Item REST API with typed methods for schema, CRUD, batch, and views.
+ * Authentication is via the x-api-key header (API key from Settings > System).
+ *
+ * All methods return ApiResult<T> — either { data, error: null } or { data: null, error }.
+ */
+
 import type {
-  ObjectTypeDefinition,
-  ItemObject,
+  SchemaResponse,
   PaginatedResponse,
   SingleResponse,
-  ItemView,
   ListViewsResponse,
-  ViewExecuteResponse,
   CreateObjectResponse,
   BatchResult,
   ListObjectsParams,
@@ -14,25 +20,17 @@ import type {
   ItemApiError,
 } from "./item-types.js";
 
-// MOCK: Object types (replace when Akshay adds the endpoint)
-const MOCK_OBJECT_TYPES: ObjectTypeDefinition[] = [
-  {
-    name: "contact",
-    label: "Contact",
-    pluralLabel: "Contacts",
-    description: "Individual people and leads",
-  },
-  {
-    name: "company",
-    label: "Company",
-    pluralLabel: "Companies",
-    description: "Organizations and accounts",
-  },
-];
+// ---------------------------------------------------------------------------
+// Result type
+// ---------------------------------------------------------------------------
 
 export type ApiResult<T> =
   | { data: T; error: null }
   | { data: null; error: ItemApiError };
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
 
 export class ItemApiClient {
   private apiKey: string;
@@ -48,6 +46,8 @@ export class ItemApiClient {
     this.apiKey = apiKey;
     this.baseUrl = options?.baseUrl ?? "https://app.useitem.io/api";
   }
+
+  // ---- Internal request helper ----
 
   private async request<T>(
     path: string,
@@ -66,13 +66,13 @@ export class ItemApiClient {
         },
       });
 
-      // Treat redirects (e.g. 307 → /login) as auth errors
+      // Redirects (e.g. 307 → /login) indicate an auth problem
       if (response.status >= 300 && response.status < 400) {
         return {
           data: null,
           error: {
             status: response.status,
-            message: `API redirected (HTTP ${response.status}). Check your API key and endpoint.`,
+            message: `API redirected (HTTP ${response.status}). Check your API key.`,
             code: "REDIRECT",
           },
         };
@@ -80,40 +80,29 @@ export class ItemApiClient {
 
       if (!response.ok) {
         let errorBody: unknown;
-        try {
-          errorBody = await response.json();
-        } catch {
-          errorBody = await response.text();
-        }
-
+        try { errorBody = await response.json(); } catch { errorBody = await response.text(); }
         return {
           data: null,
           error: {
             status: response.status,
             message:
-              typeof errorBody === "object" &&
-              errorBody !== null &&
-              "message" in errorBody
-                ? String((errorBody as Record<string, unknown>).message)
+              typeof errorBody === "object" && errorBody !== null && "error" in errorBody
+                ? String((errorBody as Record<string, unknown>).error)
                 : `HTTP ${response.status}: ${response.statusText}`,
             details: errorBody,
           },
         };
       }
 
-      if (response.status === 204) {
-        return { data: undefined as unknown as T, error: null };
-      }
+      if (response.status === 204) return { data: undefined as unknown as T, error: null };
 
-      const data = (await response.json()) as T;
-      return { data, error: null };
+      return { data: (await response.json()) as T, error: null };
     } catch (err) {
       return {
         data: null,
         error: {
           status: 0,
-          message:
-            err instanceof Error ? err.message : "Unknown network error",
+          message: err instanceof Error ? err.message : "Unknown network error",
           code: "NETWORK_ERROR",
         },
       };
@@ -121,51 +110,64 @@ export class ItemApiClient {
   }
 
   private buildQueryString(params: Record<string, unknown>): string {
-    const searchParams = new URLSearchParams();
+    const sp = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null) {
-        searchParams.set(key, String(value));
-      }
+      if (value !== undefined && value !== null) sp.set(key, String(value));
     }
-    const qs = searchParams.toString();
+    const qs = sp.toString();
     return qs ? `?${qs}` : "";
   }
 
-  // --- Object Types (MOCK) ---
+  // ---- Schema ----
 
-  async listObjectTypes(): Promise<ApiResult<ObjectTypeDefinition[]>> {
-    // MOCK: Replace with this.request<ObjectTypeDefinition[]>("/object-types")
-    return { data: MOCK_OBJECT_TYPES, error: null };
+  /** GET /api/meta/schema — returns all object types with field definitions */
+  async getSchema(): Promise<ApiResult<SchemaResponse>> {
+    return this.request<SchemaResponse>("/meta/schema");
   }
 
-  // --- Objects CRUD ---
+  // ---- Objects CRUD ----
 
+  /** GET /api/objects/{type} — list/search objects with pagination */
   async listObjects(
     objectType: string,
     params: ListObjectsParams = {}
-  ): Promise<ApiResult<PaginatedResponse<ItemObject>>> {
+  ): Promise<ApiResult<PaginatedResponse<Record<string, unknown>>>> {
+    const filterParams: Record<string, unknown> = {};
+    if (params.filters) {
+      for (const [k, v] of Object.entries(params.filters)) {
+        filterParams[`filter[${k}]`] = v;
+      }
+    }
     const qs = this.buildQueryString({
-      page: params.page,
-      pageSize: params.pageSize,
-      sort: params.sort,
-      order: params.order,
+      limit: params.limit,
+      offset: params.offset,
+      sort_by: params.sort_by,
+      sort_order: params.sort_order,
       search: params.search,
-      ...params.filters,
+      ...filterParams,
     });
-    return this.request<PaginatedResponse<ItemObject>>(
+    return this.request<PaginatedResponse<Record<string, unknown>>>(
       `/objects/${objectType}${qs}`
     );
   }
 
+  /** GET /api/objects/{type}?id=...&include_all_fields=true — get a single object */
   async getObject(
     objectType: string,
-    id: string
-  ): Promise<ApiResult<SingleResponse<ItemObject>>> {
-    return this.request<SingleResponse<ItemObject>>(
-      `/objects/${objectType}/${id}`
+    identifier: { id?: string; email?: string },
+    options?: { include_all_fields?: boolean; include_summary?: boolean }
+  ): Promise<ApiResult<SingleResponse<Record<string, unknown>>>> {
+    const qs = this.buildQueryString({
+      ...identifier,
+      include_all_fields: options?.include_all_fields,
+      include_summary: options?.include_summary,
+    });
+    return this.request<SingleResponse<Record<string, unknown>>>(
+      `/objects/${objectType}${qs}`
     );
   }
 
+  /** PUT /api/objects/{type} — create a new object */
   async createObject(
     objectType: string,
     input: ObjectInput
@@ -176,28 +178,44 @@ export class ItemApiClient {
     );
   }
 
+  /**
+   * PATCH /api/objects/{type} — update an existing object.
+   * Top-level props (name, profile_image_url) go at root.
+   * Custom fields go nested under "fields".
+   */
   async updateObject(
     objectType: string,
     id: string,
     input: Partial<ObjectInput>
-  ): Promise<ApiResult<SingleResponse<ItemObject>>> {
-    return this.request<SingleResponse<ItemObject>>(
-      `/objects/${objectType}/${id}`,
-      { method: "PATCH", body: JSON.stringify(input) }
+  ): Promise<ApiResult<SingleResponse<Record<string, unknown>>>> {
+    const { fields, ...topLevel } = input;
+    return this.request<SingleResponse<Record<string, unknown>>>(
+      `/objects/${objectType}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          id: Number(id),
+          ...topLevel,
+          ...(fields && Object.keys(fields).length > 0 ? { fields } : {}),
+        }),
+      }
     );
   }
 
+  /** DELETE /api/objects/{type} — soft-delete an object */
   async deleteObject(
     objectType: string,
     id: string
   ): Promise<ApiResult<void>> {
-    return this.request<void>(`/objects/${objectType}/${id}`, {
+    return this.request<void>(`/objects/${objectType}`, {
       method: "DELETE",
+      body: JSON.stringify({ id: Number(id) }),
     });
   }
 
-  // --- Batch Operations ---
+  // ---- Batch ----
 
+  /** POST /api/objects/{type}/batch — batch create or update up to 100 objects */
   async batchCreateOrUpdate(
     objectType: string,
     input: BatchInput
@@ -208,59 +226,21 @@ export class ItemApiClient {
     });
   }
 
-  // --- Views ---
+  // ---- Views ----
 
-  async listViews(
-    objectType: string
-  ): Promise<ApiResult<ListViewsResponse>> {
-    return this.request<ListViewsResponse>(
-      `/objects/${objectType}/views`
-    );
-  }
-
-  async executeView(
-    objectType: string,
-    viewId: string,
-    params: { limit?: number; offset?: number } = {}
-  ): Promise<ApiResult<ViewExecuteResponse>> {
-    const qs = this.buildQueryString({
-      limit: params.limit,
-      offset: params.offset,
-    });
-    return this.request<ViewExecuteResponse>(
-      `/objects/${objectType}/views/${viewId}${qs}`
-    );
-  }
-
-  // --- Pagination Helper ---
-
-  async fetchAllPages<T>(
-    fetcher: (page: number) => Promise<ApiResult<PaginatedResponse<T>>>
-  ): Promise<ApiResult<T[]>> {
-    const allItems: T[] = [];
-    let page = 1;
-
-    while (true) {
-      const result = await fetcher(page);
-      if (result.error) return { data: null, error: result.error };
-
-      allItems.push(...result.data.data);
-      if (!result.data.pagination.hasNextPage) break;
-
-      page++;
-      if (page > 100) break; // safety valve
-    }
-
-    return { data: allItems, error: null };
+  /** GET /api/objects/{type}/views — list all shared views (with columns + view_type) */
+  async listViews(objectType: string): Promise<ApiResult<ListViewsResponse>> {
+    return this.request<ListViewsResponse>(`/objects/${objectType}/views`);
   }
 }
 
-// Singleton
+// ---------------------------------------------------------------------------
+// Singleton accessor
+// ---------------------------------------------------------------------------
+
 let _client: ItemApiClient | null = null;
 
 export function getItemClient(): ItemApiClient {
-  if (!_client) {
-    _client = new ItemApiClient();
-  }
+  if (!_client) _client = new ItemApiClient();
   return _client;
 }

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 @import "@openai/apps-sdk-ui/css";
 
 /* Configure Tailwind v4 to scan for classes */
@@ -6,8 +7,53 @@
 @source "./**/*.{ts,tsx,js,jsx,html}";
 
 @theme {
-  /* Enable class-based dark mode */
   --color-scheme: light dark;
+
+  /* Item brand colors */
+  --color-item-accent: #E8612D;
+  --color-item-accent-bg: #FEF3EE;
+  --color-item-checkbox: #2B4F60;
+  --color-item-border: #E5E7EB;
+  --color-item-hover: #F9FAFB;
+  --color-item-selected: #F0F4F6;
+
+  /* Item color palette (maps to API color names from select_options) */
+  --color-item-slate-light: #F1F5F9;
+  --color-item-slate-dark: #475569;
+  --color-item-slate-dot: #94A3B8;
+  --color-item-blue-light-bg: #DBEAFE;
+  --color-item-blue-light-text: #1D4ED8;
+  --color-item-blue-light-dot: #60A5FA;
+  --color-item-blue-dark-bg: #DBEAFE;
+  --color-item-blue-dark-text: #1D4ED8;
+  --color-item-blue-dark-dot: #3B82F6;
+  --color-item-purple-light-bg: #F3E8FF;
+  --color-item-purple-light-text: #7C3AED;
+  --color-item-purple-light-dot: #C084FC;
+  --color-item-purple-dark-bg: #F3E8FF;
+  --color-item-purple-dark-text: #7C3AED;
+  --color-item-purple-dark-dot: #A855F7;
+  --color-item-yellow-light-bg: #FEF3C7;
+  --color-item-yellow-light-text: #92400E;
+  --color-item-yellow-light-dot: #FBBF24;
+  --color-item-yellow-dark-bg: #FEF3C7;
+  --color-item-yellow-dark-text: #92400E;
+  --color-item-yellow-dark-dot: #F59E0B;
+  --color-item-green-light-bg: #D1FAE5;
+  --color-item-green-light-text: #065F46;
+  --color-item-green-light-dot: #34D399;
+  --color-item-green-dark-bg: #D1FAE5;
+  --color-item-green-dark-text: #065F46;
+  --color-item-green-dark-dot: #10B981;
+  --color-item-red-light-bg: #FEE2E2;
+  --color-item-red-light-text: #991B1B;
+  --color-item-red-light-dot: #F87171;
+  --color-item-red-dark-bg: #FEE2E2;
+  --color-item-red-dark-text: #991B1B;
+  --color-item-red-dark-dot: #EF4444;
+
+  /* Font */
+  --font-item: "Manrope", "Manrope Fallback", ui-sans-serif, system-ui, sans-serif;
 }
 
 @variant dark (&:where(.dark, .dark *));

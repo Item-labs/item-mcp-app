@@ -1,6 +1,26 @@
+/**
+ * Item.app MCP Server
+ *
+ * Exposes Item CRM data via 6 MCP tools:
+ *   - get-schema:   Learn object types and their fields
+ *   - get-objects:  List/search objects with view support (table + kanban)
+ *   - get-object:   Fetch a single object by ID or email
+ *   - create-object: Create a new object
+ *   - update-object: Update an existing object's fields
+ *   - delete-object: Soft-delete an object
+ *
+ * The agent should call get-schema first to learn available object types,
+ * field names, field types, select options, and relationships.
+ */
+
 import { MCPServer, text, widget, error } from "mcp-use/server";
 import { z } from "zod";
 import { getItemClient } from "./src/lib/item-api.js";
+import type { FieldSchema, ObjectTypeSchema } from "./src/lib/item-types.js";
+
+// ---------------------------------------------------------------------------
+// Server setup
+// ---------------------------------------------------------------------------
 
 const server = new MCPServer({
   name: "item-app",
@@ -9,239 +29,308 @@ const server = new MCPServer({
   description: "MCP server for Item.app agentic CRM",
   baseUrl: process.env.MCP_URL || "http://localhost:3000",
   favicon: "favicon.ico",
-  icons: [
-    {
-      src: "icon.svg",
-      mimeType: "image/svg+xml",
-      sizes: ["512x512"],
-    },
-  ],
+  icons: [{ src: "favicon.ico", mimeType: "image/x-icon", sizes: ["16x16", "32x32"] }],
 });
 
-// --- List Object Types (text only) ---
-server.tool(
-  {
-    name: "list-object-types",
-    description:
-      "List all available object types in Item.app CRM (e.g., contact, company)",
-    schema: z.object({}),
-    annotations: { readOnlyHint: true },
-  },
-  async () => {
-    try {
-      const client = getItemClient();
-      const result = await client.listObjectTypes();
-      if (result.error) {
-        return error(`Failed to list object types: ${result.error.message}`);
-      }
-      const names = result.data.map((t) => t.name).join(", ");
-      return text(`Available object types: ${names}`);
-    } catch (err) {
-      return error(
-        `Failed to list object types: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
-  }
-);
+// ---------------------------------------------------------------------------
+// Helpers — schema formatting
+// ---------------------------------------------------------------------------
 
-// --- Create Object (with object-card widget) ---
-server.tool(
-  {
-    name: "create-object",
-    description:
-      "Create a new object (contact, company, etc.) in Item.app CRM. Deduplicates contacts by email and companies by domain/name.",
-    schema: z.object({
-      objectType: z
-        .string()
-        .describe(
-          "The object type slug (e.g., 'contacts', 'companies', 'deals')"
-        ),
-      name: z.string().describe("Display name for the object (e.g., 'Alex Johnson')"),
-      fields: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "Custom field key-value pairs (e.g., { email: 'alex@acme.com', role: 'Engineer' })"
-        ),
-      profile_image_url: z
-        .string()
-        .optional()
-        .describe("Avatar/logo URL for the object"),
-    }),
-    widget: {
-      name: "object-card",
-      invoking: "Creating...",
-      invoked: "Created",
+/** Internal fields that should not be exposed to the widget UI */
+const INTERNAL_KEYS = new Set(["id", "created_at", "updated_at"]);
+
+/** Format a single field definition for the agent's text output */
+function describeField(f: FieldSchema): string {
+  let desc = `${f.field_name} (${f.field_type}`;
+  if (f.is_required) desc += ", required";
+  desc += ")";
+  if (f.description) desc += ` — ${f.description}`;
+  if (f.select_options?.length) {
+    desc += ` [options: ${f.select_options.map((o) => o.value).join(", ")}]`;
+  }
+  if (f.related_object_type_id) {
+    desc += ` [ID of related object type ${f.related_object_type_id}]`;
+  }
+  return desc;
+}
+
+/** Format a list of object types with their fields for the agent */
+function describeSchema(types: ObjectTypeSchema[]): string {
+  return types
+    .map((t) => {
+      const fields = t.fields.map((f) => `  - ${describeField(f)}`).join("\n");
+      return `## ${t.plural_display_name} (slug: "${t.slug}")\n${t.description}\nFields:\n${fields}`;
+    })
+    .join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — record → widget props
+// ---------------------------------------------------------------------------
+
+interface WidgetItem {
+  id: string;
+  objectType: string;
+  fields: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Convert a raw API record into the shape expected by the view-table widget */
+function toWidgetItem(record: Record<string, unknown>, objectType: string): WidgetItem {
+  return {
+    id: String(record.id ?? ""),
+    objectType,
+    fields: Object.fromEntries(
+      Object.entries(record).filter(([k]) => !INTERNAL_KEYS.has(k))
+    ),
+    createdAt: String(record.created_at ?? ""),
+    updatedAt: String(record.updated_at ?? ""),
+  };
+}
+
+/** Convert a raw API record into the shape expected by the object-card widget */
+function toCardProps(record: Record<string, unknown>, objectType: string) {
+  const { id, created_at, updated_at, ...fields } = record;
+  return {
+    objectType,
+    object: {
+      id: String(id),
+      objectType,
+      fields,
+      createdAt: String(created_at ?? ""),
+      updatedAt: String(updated_at ?? ""),
     },
-  },
-  async ({ objectType, name: objectName, fields, profile_image_url }) => {
-    try {
-      const client = getItemClient();
-      const result = await client.createObject(objectType, {
-        name: objectName,
-        fields,
-        profile_image_url,
-      });
-      if (result.error) {
-        return error(
-          `Failed to create ${objectType}: ${result.error.message}`
-        );
-      }
+    fields,
+  };
+}
 
-      const record = result.data.data;
-      // The API returns a flat object — separate known keys from custom fields
-      const { id, name: rName, created_at, updated_at, ...rest } = record as Record<string, unknown>;
-      const displayFields: Record<string, unknown> = { name: rName, ...rest };
+// ---------------------------------------------------------------------------
+// Tool: get-schema
+// ---------------------------------------------------------------------------
 
-      return widget({
-        props: {
-          objectType,
-          object: {
-            id: String(id),
-            objectType,
-            fields: displayFields,
-            createdAt: String(created_at ?? ""),
-            updatedAt: String(updated_at ?? ""),
-          },
-          fields: displayFields,
-        },
-        output: text(
-          `Created ${objectType} (id: ${id}) with name "${rName}" and fields: ${JSON.stringify(rest)}`
-        ),
-      });
-    } catch (err) {
-      return error(
-        `Failed to create ${objectType}: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
-  }
-);
-
-// --- List Views (text only) ---
 server.tool(
   {
-    name: "list-views",
+    name: "get-schema",
     description:
-      "List all available views for an object type in Item.app CRM. Use 'contacts' for People, 'companies' for Companies.",
+      "Get the full schema of all object types in this Item CRM workspace, " +
+      "including field names, types, required status, select options, and relationships. " +
+      "Call this FIRST before creating or updating objects.",
     schema: z.object({
-      objectType: z
-        .string()
-        .describe(
-          "The object type slug (e.g., 'contacts', 'companies', 'deals')"
-        ),
+      objectType: z.string().optional().describe(
+        "Filter to a specific object type slug (e.g., 'contacts'). Omit to get all types."
+      ),
     }),
     annotations: { readOnlyHint: true },
   },
   async ({ objectType }) => {
-    try {
-      const client = getItemClient();
-      const result = await client.listViews(objectType);
-      if (result.error) {
-        return error(`Failed to list views: ${result.error.message}`);
+    const client = getItemClient();
+    const result = await client.getSchema();
+    if (result.error) return error(`Failed to get schema: ${result.error.message}`);
+
+    let types = result.data.data;
+    if (objectType) {
+      types = types.filter((t) => t.slug === objectType);
+      if (types.length === 0) {
+        return error(`Object type "${objectType}" not found.`);
       }
-      const views = result.data.data;
-      if (views.length === 0) {
-        return text(`No views available for ${objectType}.`);
-      }
-      const listing = views
-        .map(
-          (v) =>
-            `- ${v.name} (id: ${v.id}, type: ${v.view_type ?? "table"})`
-        )
-        .join("\n");
-      return text(`Available ${objectType} views:\n${listing}`);
-    } catch (err) {
-      return error(
-        `Failed to list views: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
     }
+
+    return text(describeSchema(types));
   }
 );
 
-// --- Show View (with view-table widget) ---
+// ---------------------------------------------------------------------------
+// Tool: get-objects
+// ---------------------------------------------------------------------------
+
 server.tool(
   {
-    name: "show-view",
+    name: "get-objects",
     description:
-      "Execute a saved view and display its results in a table. Use list-views first to find available view IDs.",
+      "List or search objects. Auto-selects the first saved view when no viewId or search is given. " +
+      "The widget renders as table or kanban based on the view's type.",
     schema: z.object({
-      objectType: z
-        .string()
-        .describe(
-          "The object type slug (e.g., 'contacts', 'companies', 'deals')"
-        ),
-      viewId: z.string().describe("The ID of the view to execute"),
-      limit: z
-        .number()
-        .optional()
-        .describe("Max number of items to return (default 50, max 200)"),
-      offset: z
-        .number()
-        .optional()
-        .describe("Number of records to skip for pagination"),
+      objectType: z.string().describe("Object type slug (e.g., 'contacts', 'companies', 'deals')"),
+      viewId: z.string().optional().describe("Saved view ID. Omit to auto-select the first view."),
+      search: z.string().optional().describe("Search query (skips view auto-selection)"),
+      limit: z.number().optional().describe("Max items per page (default 50, max 200)"),
+      offset: z.number().optional().describe("Records to skip for pagination"),
+      sort: z.string().optional().describe("Field name to sort by"),
+      order: z.enum(["asc", "desc"]).optional().describe("Sort order"),
     }),
-    widget: {
-      name: "view-table",
-      invoking: "Loading view...",
-      invoked: "View loaded",
-    },
+    annotations: { readOnlyHint: true },
+    widget: { name: "view-display", invoking: "Loading...", invoked: "Loaded" },
   },
-  async ({ objectType, viewId, limit = 50, offset = 0 }) => {
-    try {
-      const client = getItemClient();
+  async ({ objectType, viewId, search, limit = 50, offset = 0, sort, order }) => {
+    const client = getItemClient();
 
-      // Execute the view (the API validates the viewId for us)
-      const execResult = await client.executeView(objectType, viewId, {
-        limit,
-        offset,
-      });
-      if (execResult.error) {
-        return error(
-          `Failed to execute view: ${execResult.error.message}`
-        );
-      }
+    // Fetch objects and views in parallel
+    const [viewsResult, listResult] = await Promise.all([
+      client.listViews(objectType),
+      client.listObjects(objectType, { search, limit, offset, sort_by: sort, sort_order: order }),
+    ]);
 
-      const { data: records, view, pagination } = execResult.data;
+    if (listResult.error) return error(`Failed to list ${objectType}: ${listResult.error.message}`);
 
-      // Derive columns from the first record's keys (excluding id, created_at, updated_at)
-      const skipKeys = new Set(["id", "created_at", "updated_at"]);
-      const columns: string[] = [];
-      if (records.length > 0) {
-        columns.push(
-          ...Object.keys(records[0]).filter((k) => !skipKeys.has(k))
-        );
-      }
+    const allViews = viewsResult.error ? [] : viewsResult.data.data;
+    const records = listResult.data.data;
+    const pagination = listResult.data.pagination;
 
-      // Normalize records into the widget's item shape
-      const items = records.map((r) => ({
-        id: String(r.id ?? ""),
+    // Resolve the active view: explicit viewId > auto-select first view > none (plain list)
+    const activeViewId = viewId ?? (!search ? allViews[0]?.id : undefined);
+    const activeView = activeViewId ? allViews.find((v) => v.id === activeViewId) : undefined;
+
+    // View metadata drives the display: columns, view type, name
+    const viewName = activeView?.name ?? (search ? `Search: "${search}"` : "All");
+    const viewType = activeView?.view_type ?? "table";
+    const columns = activeView?.columns ??
+      (records.length > 0 ? Object.keys(records[0]).filter((k) => !INTERNAL_KEYS.has(k)) : []);
+
+    return widget({
+      props: {
         objectType,
-        fields: Object.fromEntries(
-          Object.entries(r).filter(([k]) => !skipKeys.has(k))
-        ),
-        createdAt: String(r.created_at ?? ""),
-        updatedAt: String(r.updated_at ?? ""),
-      }));
-
-      return widget({
-        props: {
-          viewName: view.name,
-          viewType: "table",
-          items,
-          columns,
+        viewName,
+        viewType,
+        viewId: activeViewId ?? "",
+        columns,
+        items: records.map((r) => toWidgetItem(r, objectType)),
+        pagination: {
+          total: pagination.total,
+          limit: pagination.limit,
+          offset: pagination.offset,
+          hasMore: pagination.has_more,
         },
-        output: text(
-          `View "${view.name}" returned ${items.length} of ${pagination.total} records (${columns.length} columns)`
-        ),
-      });
-    } catch (err) {
-      return error(
-        `Failed to show view: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
+        availableViews: allViews.map((v) => ({
+          id: v.id,
+          name: v.name,
+          viewType: v.view_type ?? "table",
+          columns: v.columns ?? [],
+        })),
+      },
+      output: text(`${viewName} (${viewType}) — ${records.length} of ${pagination.total} ${objectType}`),
+    });
   }
 );
 
-server.listen().then(() => {
-  console.log("Item.app MCP server running");
-});
+// ---------------------------------------------------------------------------
+// Tool: get-object
+// ---------------------------------------------------------------------------
+
+server.tool(
+  {
+    name: "get-object",
+    description: "Get a single object by ID or email with all fields.",
+    schema: z.object({
+      objectType: z.string().describe("Object type slug"),
+      id: z.string().optional().describe("Object ID"),
+      email: z.string().optional().describe("Object email (contacts only)"),
+    }),
+    annotations: { readOnlyHint: true },
+    widget: { name: "object-card", invoking: "Loading...", invoked: "Loaded" },
+  },
+  async ({ objectType, id, email }) => {
+    if (!id && !email) return error("Provide either id or email.");
+
+    const client = getItemClient();
+    const result = await client.getObject(objectType, { id, email }, { include_all_fields: true });
+    if (result.error) return error(`Failed to get ${objectType}: ${result.error.message}`);
+
+    const record = result.data.data;
+    return widget({
+      props: toCardProps(record, objectType),
+      output: text(`${objectType} #${record.id}: ${JSON.stringify(
+        Object.fromEntries(Object.entries(record).filter(([k]) => !INTERNAL_KEYS.has(k)))
+      )}`),
+    });
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Tool: create-object
+// ---------------------------------------------------------------------------
+
+server.tool(
+  {
+    name: "create-object",
+    description:
+      "Create a new object. Call get-schema first to see available fields. " +
+      "Deduplicates contacts by email, companies by domain/name.",
+    schema: z.object({
+      objectType: z.string().describe("Object type slug"),
+      name: z.string().describe("Display name"),
+      fields: z.record(z.string(), z.unknown()).optional().describe("Field key-value pairs (see get-schema)"),
+      profile_image_url: z.string().optional().describe("Avatar/logo URL"),
+    }),
+    widget: { name: "object-card", invoking: "Creating...", invoked: "Created" },
+  },
+  async ({ objectType, name: objectName, fields, profile_image_url }) => {
+    const client = getItemClient();
+    const result = await client.createObject(objectType, { name: objectName, fields, profile_image_url });
+    if (result.error) return error(`Failed to create ${objectType}: ${result.error.message}`);
+
+    const record = result.data.data;
+    return widget({
+      props: toCardProps(record, objectType),
+      output: text(`Created ${objectType} #${record.id}: "${record.name}"`),
+    });
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Tool: update-object
+// ---------------------------------------------------------------------------
+
+server.tool(
+  {
+    name: "update-object",
+    description: "Update an existing object's fields. Call get-schema first to see available fields.",
+    schema: z.object({
+      objectType: z.string().describe("Object type slug"),
+      id: z.string().describe("Object ID to update"),
+      name: z.string().optional().describe("New display name"),
+      fields: z.record(z.string(), z.unknown()).optional().describe("Field key-value pairs to update"),
+      profile_image_url: z.string().optional().describe("New avatar/logo URL"),
+    }),
+  },
+  async ({ objectType, id, name: objectName, fields, profile_image_url }) => {
+    const client = getItemClient();
+    const input: Partial<{ name: string; fields: Record<string, unknown>; profile_image_url: string }> = {};
+    if (objectName !== undefined) input.name = objectName;
+    if (fields !== undefined) input.fields = fields;
+    if (profile_image_url !== undefined) input.profile_image_url = profile_image_url;
+
+    const result = await client.updateObject(objectType, id, input);
+    if (result.error) return error(`Failed to update ${objectType}: ${result.error.message}`);
+
+    return text(`Updated ${objectType} #${id}`);
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Tool: delete-object
+// ---------------------------------------------------------------------------
+
+server.tool(
+  {
+    name: "delete-object",
+    description: "Soft-delete an object by ID. Can be recovered.",
+    schema: z.object({
+      objectType: z.string().describe("Object type slug"),
+      id: z.string().describe("Object ID to delete"),
+    }),
+  },
+  async ({ objectType, id }) => {
+    const client = getItemClient();
+    const result = await client.deleteObject(objectType, id);
+    if (result.error) return error(`Failed to delete ${objectType}: ${result.error.message}`);
+
+    return text(`Deleted ${objectType} #${id} (soft delete)`);
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+server.listen().then(() => console.log("Item.app MCP server running"));

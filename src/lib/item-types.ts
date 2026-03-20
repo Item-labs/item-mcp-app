@@ -1,35 +1,112 @@
-// Item.app CRM API Types
+/**
+ * Item.app CRM API — Type definitions
+ *
+ * These types mirror the Item API responses as documented in openapi.yaml.
+ * See https://docs.item.app/api-reference/ for the full specification.
+ */
 
-export interface ObjectTypeDefinition {
-  name: string;
-  label: string;
-  pluralLabel: string;
+// ---------------------------------------------------------------------------
+// Schema (GET /api/meta/schema)
+// ---------------------------------------------------------------------------
+
+export interface SchemaResponse {
+  data: ObjectTypeSchema[];
+}
+
+export interface ObjectTypeSchema {
+  id: number;
+  slug: string;
+  display_name: string;
+  plural_display_name: string;
   description: string;
+  icon: string;
+  fields: FieldSchema[];
 }
 
-export interface ItemObject {
-  id: string;
-  objectType: string;
-  fields: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
+export interface FieldSchema {
+  field_name: string;
+  display_name: string;
+  field_type: string;
+  field_order: number;
+  is_required: boolean;
+  description: string | null;
+  select_options: SelectOption[] | null;
+  allow_multiple: boolean;
+  related_object_type_id: number | null;
+  relationship_type: string | null;
+  number_min: number | null;
+  number_max: number | null;
+  number_decimal_places: number | null;
+  currency_decimal_places: number | null;
+  default_value: unknown;
+  visibility_type: string;
 }
 
+export interface SelectOption {
+  color: string;
+  label: string;
+  order: number;
+  value: string;
+}
+
+// ---------------------------------------------------------------------------
+// Objects CRUD
+// ---------------------------------------------------------------------------
+
+/** Paginated list response (GET /api/objects/{type}) */
 export interface PaginatedResponse<T> {
   data: T[];
   pagination: {
-    page: number;
-    pageSize: number;
-    totalCount: number;
-    totalPages: number;
-    hasNextPage: boolean;
-    hasPreviousPage: boolean;
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
   };
 }
 
+/** Single object response (GET /api/objects/{type}?id=...) */
 export interface SingleResponse<T> {
   data: T;
 }
+
+/** Parameters for listing objects */
+export interface ListObjectsParams {
+  limit?: number;
+  offset?: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  search?: string;
+  filters?: Record<string, string>;
+}
+
+/** Input for creating an object (PUT /api/objects/{type}) */
+export interface ObjectInput {
+  name: string;
+  fields?: Record<string, unknown>;
+  profile_image_url?: string;
+}
+
+/** Response from creating an object */
+export interface CreateObjectResponse {
+  data: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Batch (POST /api/objects/{type}/batch)
+// ---------------------------------------------------------------------------
+
+export interface BatchInput {
+  objects: (ObjectInput & { match_by?: string; match_value?: string })[];
+}
+
+export interface BatchResult {
+  succeeded: Array<{ id: string; status: "created" | "updated" }>;
+  failed: Array<{ index: number; error: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Views (GET /api/objects/{type}/views)
+// ---------------------------------------------------------------------------
 
 export interface ItemView {
   id: string;
@@ -42,45 +119,9 @@ export interface ListViewsResponse {
   data: ItemView[];
 }
 
-export interface ViewExecuteResponse {
-  data: Record<string, unknown>[];
-  view: { id: string; name: string };
-  pagination: {
-    total: number;
-    limit: number;
-    offset: number;
-    has_more: boolean;
-  };
-}
-
-export interface BatchResult {
-  succeeded: Array<{ id: string; status: "created" | "updated" }>;
-  failed: Array<{ index: number; error: string }>;
-}
-
-export interface ListObjectsParams {
-  page?: number;
-  pageSize?: number;
-  sort?: string;
-  order?: "asc" | "desc";
-  search?: string;
-  filters?: Record<string, unknown>;
-}
-
-export interface ObjectInput {
-  name: string;
-  fields?: Record<string, unknown>;
-  profile_image_url?: string;
-}
-
-export interface CreateObjectResponse {
-  data: Record<string, unknown>;
-}
-
-export interface BatchInput {
-  objects: ObjectInput[];
-  matchBy?: string;
-}
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
 
 export interface ItemApiError {
   status: number;
