@@ -40,7 +40,7 @@ export class ItemApiClient {
     const apiKey = options?.apiKey ?? process.env.ITEM_API_KEY;
     if (!apiKey) {
       throw new Error(
-        "ITEM_API_KEY is required. Set it in environment variables or pass to constructor."
+        "No API key provided. Connect with ?api_key=sk_live_... in the URL, or set ITEM_API_KEY env var."
       );
     }
     this.apiKey = apiKey;

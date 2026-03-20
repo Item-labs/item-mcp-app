@@ -40,10 +40,14 @@ const server = new MCPServer({
 // ---------------------------------------------------------------------------
 
 server.use("/mcp", async (c, next) => {
-  const apiKey = c.req.query("api_key");
-  const sessionId = c.req.header("mcp-session-id");
-  if (apiKey && sessionId) {
-    setSessionApiKey(sessionId, apiKey);
+  try {
+    const apiKey = c.req?.query("api_key");
+    const sessionId = c.req?.header("mcp-session-id");
+    if (apiKey && sessionId) {
+      setSessionApiKey(sessionId, apiKey);
+    }
+  } catch {
+    // Some internal routes (SSE, etc.) may not have a standard req object
   }
   await next();
 });
