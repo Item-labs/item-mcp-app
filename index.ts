@@ -351,6 +351,31 @@ server.tool(
 );
 
 // ---------------------------------------------------------------------------
+// Tool: debug-auth
+// ---------------------------------------------------------------------------
+
+server.tool(
+  {
+    name: "debug-auth",
+    description: "Echo the API key the server is using (partially redacted). For debugging auth issues.",
+    schema: z.object({}),
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    const redact = (k: string) => `${k.slice(0, 12)}...${k.slice(-4)}`;
+    const key = getApiKey();
+    const envKey = process.env.ITEM_API_KEY;
+
+    const lines = [
+      `API key from context: ${key ? redact(key) : "(none)"}`,
+      `ITEM_API_KEY env: ${envKey ? redact(envKey) : "(not set)"}`,
+      `Using: ${key ? "URL query param (AsyncLocalStorage)" : envKey ? "env var fallback" : "NONE"}`,
+    ];
+    return text(lines.join("\n"));
+  }
+);
+
+// ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 
