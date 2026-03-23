@@ -6,6 +6,10 @@
 
 MCP server for [Item.app](https://useitem.io) — an agentic CRM. Exposes Item's CRM data (contacts, companies, deals, and custom objects) via MCP tools with live UI widgets.
 
+<p align="center">
+  <img src="public/screenshot.png" alt="Item MCP in ChatGPT" width="700">
+</p>
+
 ## Quick Start
 
 ```bash
