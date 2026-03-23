@@ -232,31 +232,21 @@ export class ItemApiClient {
 }
 
 // ---------------------------------------------------------------------------
-// Per-session client management
+// Client factory
 // ---------------------------------------------------------------------------
 
-/** API keys indexed by MCP session ID, populated by the /mcp middleware */
-const sessionApiKeys = new Map<string, string>();
-
-export function setSessionApiKey(sessionId: string, apiKey: string): void {
-  sessionApiKeys.set(sessionId, apiKey);
-}
+import { getApiKey } from "./api-key-store.js";
 
 /** Fallback singleton for local dev (reads from ITEM_API_KEY env var) */
 let _defaultClient: ItemApiClient | null = null;
 
 /**
- * Get an API client for the given session.
- * Looks up the API key from:
- *   1. Per-session store (set via URL ?api_key= param)
- *   2. ITEM_API_KEY environment variable (local dev fallback)
+ * Get an API client for the current request.
+ * Reads the API key from AsyncLocalStorage (set by middleware), or falls back to env var.
  */
-export function getItemClient(sessionId?: string): ItemApiClient {
-  if (sessionId) {
-    const key = sessionApiKeys.get(sessionId);
-    if (key) return new ItemApiClient({ apiKey: key });
-    console.warn(`[item-api] No API key for session ${sessionId}, falling back to env var`);
-  }
+export function getItemClient(): ItemApiClient {
+  const key = getApiKey();
+  if (key) return new ItemApiClient({ apiKey: key });
   if (!_defaultClient) _defaultClient = new ItemApiClient();
   return _defaultClient;
 }

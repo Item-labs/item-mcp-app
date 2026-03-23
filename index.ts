@@ -15,7 +15,8 @@
 
 import { MCPServer, text, widget, error } from "mcp-use/server";
 import { z } from "zod";
-import { getItemClient, setSessionApiKey } from "./src/lib/item-api.js";
+import { getItemClient } from "./src/lib/item-api.js";
+import { runWithApiKey, getApiKey } from "./src/lib/api-key-store.js";
 import type { FieldSchema, ObjectTypeSchema } from "./src/lib/item-types.js";
 
 // ---------------------------------------------------------------------------
@@ -33,23 +34,22 @@ const server = new MCPServer({
 });
 
 // ---------------------------------------------------------------------------
-// Middleware: extract api_key from URL query param for per-user auth.
+// Middleware: bind api_key to the async context for tool handlers.
 // Users connect with: https://host/mcp?api_key=sk_live_...
-// The key is stored by session ID so each user gets their own API client.
 // Falls back to ITEM_API_KEY env var for local development.
+//
+// Workaround: the framework doesn't propagate the Hono request context
+// to tool handlers (they get a stale context without query params).
+// We use our own AsyncLocalStorage to carry the key. See MCP-1568.
 // ---------------------------------------------------------------------------
 
 server.use("/mcp", async (c, next) => {
   try {
     const apiKey = c.req?.query("api_key");
-    const sessionId = c.req?.header("mcp-session-id");
-    if (apiKey && sessionId) {
-      console.log(`[item] API key registered for session ${sessionId} (key: ${apiKey.slice(0, 8)}...)`);
-      setSessionApiKey(sessionId, apiKey);
+    if (apiKey) {
+      return runWithApiKey(apiKey, () => next());
     }
-  } catch {
-    // Some internal routes (SSE, etc.) may not have a standard req object
-  }
+  } catch {}
   await next();
 });
 
@@ -145,7 +145,7 @@ server.tool(
     annotations: { readOnlyHint: true },
   },
   async ({ objectType }, ctx) => {
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
     const result = await client.getSchema();
     if (result.error) return error(`Failed to get schema: ${result.error.message}`);
 
@@ -184,7 +184,7 @@ server.tool(
     widget: { name: "view-display", invoking: "Loading...", invoked: "Loaded" },
   },
   async ({ objectType, viewId, search, limit = 50, offset = 0, sort, order }, ctx) => {
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
 
     // Fetch objects and views in parallel
     const [viewsResult, listResult] = await Promise.all([
@@ -253,7 +253,7 @@ server.tool(
   async ({ objectType, id, email }, ctx) => {
     if (!id && !email) return error("Provide either id or email.");
 
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
     const result = await client.getObject(objectType, { id, email }, { include_all_fields: true });
     if (result.error) return error(`Failed to get ${objectType}: ${result.error.message}`);
 
@@ -286,7 +286,7 @@ server.tool(
     widget: { name: "object-card", invoking: "Creating...", invoked: "Created" },
   },
   async ({ objectType, name: objectName, fields, profile_image_url }, ctx) => {
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
     const result = await client.createObject(objectType, { name: objectName, fields, profile_image_url });
     if (result.error) return error(`Failed to create ${objectType}: ${result.error.message}`);
 
@@ -315,7 +315,7 @@ server.tool(
     }),
   },
   async ({ objectType, id, name: objectName, fields, profile_image_url }, ctx) => {
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
     const input: Partial<{ name: string; fields: Record<string, unknown>; profile_image_url: string }> = {};
     if (objectName !== undefined) input.name = objectName;
     if (fields !== undefined) input.fields = fields;
@@ -342,7 +342,7 @@ server.tool(
     }),
   },
   async ({ objectType, id }, ctx) => {
-    const client = getItemClient(ctx.session.sessionId);
+    const client = getItemClient();
     const result = await client.deleteObject(objectType, id);
     if (result.error) return error(`Failed to delete ${objectType}: ${result.error.message}`);
 
