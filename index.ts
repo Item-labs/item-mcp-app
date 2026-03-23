@@ -177,19 +177,17 @@ server.tool(
       search: z.string().optional().describe("Search query (skips view auto-selection)"),
       limit: z.number().optional().describe("Max items per page (default 50, max 200)"),
       offset: z.number().optional().describe("Records to skip for pagination"),
-      sort: z.string().optional().describe("Field name to sort by"),
-      order: z.enum(["asc", "desc"]).optional().describe("Sort order"),
     }),
     annotations: { readOnlyHint: true },
     widget: { name: "view-display", invoking: "Loading...", invoked: "Loaded" },
   },
-  async ({ objectType, viewId, search, limit = 50, offset = 0, sort, order }, ctx) => {
+  async ({ objectType, viewId, search, limit = 50, offset = 0 }, ctx) => {
     const client = getItemClient();
 
     // Fetch objects and views in parallel
     const [viewsResult, listResult] = await Promise.all([
       client.listViews(objectType),
-      client.listObjects(objectType, { search, limit, offset, sort_by: sort, sort_order: order }),
+      client.listObjects(objectType, { search, limit, offset }),
     ]);
 
     if (listResult.error) return error(`Failed to list ${objectType}: ${listResult.error.message}`);
