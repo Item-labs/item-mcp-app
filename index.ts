@@ -44,6 +44,7 @@ server.use("/mcp", async (c, next) => {
     const apiKey = c.req?.query("api_key");
     const sessionId = c.req?.header("mcp-session-id");
     if (apiKey && sessionId) {
+      console.log(`[item] API key registered for session ${sessionId} (key: ${apiKey.slice(0, 8)}...)`);
       setSessionApiKey(sessionId, apiKey);
     }
   } catch {

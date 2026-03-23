@@ -68,6 +68,7 @@ export class ItemApiClient {
 
       // Redirects (e.g. 307 → /login) indicate an auth problem
       if (response.status >= 300 && response.status < 400) {
+        console.error(`[item-api] ${options.method ?? "GET"} ${path} → ${response.status} redirect (auth issue)`);
         return {
           data: null,
           error: {
@@ -81,16 +82,14 @@ export class ItemApiClient {
       if (!response.ok) {
         let errorBody: unknown;
         try { errorBody = await response.json(); } catch { errorBody = await response.text(); }
+        const message =
+          typeof errorBody === "object" && errorBody !== null && "error" in errorBody
+            ? String((errorBody as Record<string, unknown>).error)
+            : `HTTP ${response.status}: ${response.statusText}`;
+        console.error(`[item-api] ${options.method ?? "GET"} ${path} → ${response.status}: ${message}`);
         return {
           data: null,
-          error: {
-            status: response.status,
-            message:
-              typeof errorBody === "object" && errorBody !== null && "error" in errorBody
-                ? String((errorBody as Record<string, unknown>).error)
-                : `HTTP ${response.status}: ${response.statusText}`,
-            details: errorBody,
-          },
+          error: { status: response.status, message, details: errorBody },
         };
       }
 
@@ -98,13 +97,11 @@ export class ItemApiClient {
 
       return { data: (await response.json()) as T, error: null };
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown network error";
+      console.error(`[item-api] ${options.method ?? "GET"} ${path} → network error: ${message}`);
       return {
         data: null,
-        error: {
-          status: 0,
-          message: err instanceof Error ? err.message : "Unknown network error",
-          code: "NETWORK_ERROR",
-        },
+        error: { status: 0, message, code: "NETWORK_ERROR" },
       };
     }
   }
@@ -258,6 +255,7 @@ export function getItemClient(sessionId?: string): ItemApiClient {
   if (sessionId) {
     const key = sessionApiKeys.get(sessionId);
     if (key) return new ItemApiClient({ apiKey: key });
+    console.warn(`[item-api] No API key for session ${sessionId}, falling back to env var`);
   }
   if (!_defaultClient) _defaultClient = new ItemApiClient();
   return _defaultClient;
